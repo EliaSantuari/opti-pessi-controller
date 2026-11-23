@@ -63,12 +63,16 @@ heading:
 # Radius and speed bound per class of legged_controllers/msg/Obstacle (same values of task.info obstacleTypes):
 # the topic carries only class and position
 obstacle_types:
-  human: {radius: 0.2, y_dot_max: 1.0}
-  car: {radius: 2.4, y_dot_max: 2.0}
+  human: {radius: 0.2, y_dot_max: 1.0, a_max: 1.0}
+  car: {radius: 2.4, y_dot_max: 2.0, a_max: 3.0}
 
 
 obstacles:
   N_OBS_MAX: 3
+  margin_kind: "support"        # leonardelli | min_max | support
+  safety_factor: 1.8            # multiplies r + margin in both branches (as the old r_dynamic * 1.8): regenerate after a change
+  pos_uncertainty: 0.0           # m, e_y added to radius
+  vel_uncertainty: 0.0          # m/s, e_v whem velocity is known
   obs_pos_init: [0.1, 1.0]      # m
   r_obs: 0.2                    # m
   speed: 0.5                    # m/s
@@ -78,13 +82,14 @@ obstacles:
   obs_type: "random"            # static, dynamic, adversarial, circular, random
   obs_center: [1.0, 0.2]        # m
   instances: 
-    - {type: "adversarial", pos: [0.3, 0.8], r_obs: 0.2, speed: 0.2, y_dot_max: 1.0}
+        - {type: "dynamic", class: "human", pos: [2.0, 1.2], pos_end: [2.0, -5.0], r_obs: 0.2, speed: 0.4, y_dot_max: 1.0, a_max: 1.0}
+
     # circular: starts at pos, turns around center (radius = |pos - center|), speed in m/s along the circle,
     # clockwise optional (default false = counter-clockwise)
-    # - {type: "circular", class: "human", pos: [2.0, 0.8], center: [2.0, 0.0], r_obs: 0.3, speed: 0.4, clockwise: false, y_dot_max: 1.0}
-    # - {type: "dynamic", class: "human", pos: [2.0, 0.5], pos_end: [2.0, -0.5], r_obs: 0.15, speed: 0.5, y_dot_max: 1.0}                
-    # - {type: "adversarial", pos: [2.0, 1.0], r_obs: 0.3, speed: 0.5, y_dot_max: 1.0}
-    # - {type: "static", pos: [2.0, 0], r_obs: 0.3, y_dot_max: 1.0}
+    # - {type: "circular", class: "human", pos: [2.0, 0.8], center: [2.0, 0.0], r_obs: 0.3, speed: 0.4, clockwise: false, y_dot_max: 1.0, a_max: 1.0}
+    # - {type: "dynamic", class: "human", pos: [2.0, 0.5], pos_end: [2.0, -0.5], r_obs: 0.15, speed: 0.5, y_dot_max: 1.0, a_max: 1.0}                
+    # - {type: "adversarial", pos: [2.0, 1.0], r_obs: 0.3, speed: 0.5, y_dot_max: 1.0, a_max: 1.0}
+    # - {type: "static", pos: [2.0, 0], r_obs: 0.3, y_dot_max: 1.0, a_max: 1.0}
   random:
     count: 0                    # 0 = 0ff
     seed: 42
@@ -92,6 +97,7 @@ obstacles:
     r_range: [0.1, 0.4]         # m
     speed_range: [0.5, 0.8]     # m/s
     y_dot_max: 1.0              # m/s, never lower than highest speed
+    a_max: 1.0                  # m/s^2
 
 
 # CoM, orientation and swing-foot gains are those of OptiPessiWbc in task.info (optiPessiWbc, swingLegTask)

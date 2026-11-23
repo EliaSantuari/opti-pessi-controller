@@ -373,7 +373,22 @@ controller_interface::CallbackReturn AcadosLeggedController::on_configure(const 
                             "[Acados MPC]: obstacle of unknown type %u ignored", static_cast<unsigned>(obs.type));
                         continue;
                     }
-                    obstacles.push_back({obs.position.x, obs.position.y, type->radius, type->y_dot_max});
+                    ObstacleState state{obs.position.x, obs.position.y, type->radius, type->y_dot_max, type->a_max};
+                    if (obs.velocity_valid){
+                        state.vx = obs.velocity.x;
+                        state.vy = obs.velocity.y;
+                        const double speed = std::hypot(state.vx, state.vy);
+                        if (speed > state.y_dot_max) {
+                            RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
+                                "[Acados MPC]: obstacle at %.2f m/s, above y_dot_max %.2f of its class", speed, state.y_dot_max);
+                            state.vx *= state.y_dot_max / speed;
+                            state.vy *= state.y_dot_max / speed;
+                        }
+                        state.e_v = cfg_.vel_uncertainty;
+                    } else {
+                        state.e_v = 2.0 * state.y_dot_max;  // u0 saturates at y_dot_max
+                    }
+                    obstacles.push_back(state);
                 }
                 std::lock_guard<std::mutex> lock(obstacles_mutex_);
                 topic_obstacles_ = std::move(obstacles);
@@ -556,23 +571,36 @@ void AcadosLeggedController::setWarmStart(const std::vector<double>& x0, const G
     const int shift = (gait.stepIndex() != last_step_index_) ? 1 : 0;
     last_step_index_ = gait.stepIndex();
 
-    // Guess of the hyperplane between the closest robot point (CoM or hips) and the obstacle
-    auto hyperplaneGuess = [](const double c[2], const double hips[4], const double obs[2]) {
+    // Guess of the hyperplane: normal from the closest robot point (CoM or hips) towards the obstacle, 
+    // the line touches the obstacle set (radius + margin) or sits halfway in the gap if the robot is outside of it
+    const std::string& kind = cfg_.margin_kind;
+    const double k_safe = cfg_.safety_factor;
+    auto hyperplaneGuess = [&kind, k_safe](const double c[2], const double hips[4], const ObstacleState& o, bool pessimistic, double t) {
+        // pessimistic: towards the nominal position y0 + v0 t, optimistic: towards y0
+        const double tx = pessimistic ? o.x + o.vx * t : o.x;
+        const double ty = pessimistic ? o.y + o.vy * t : o.y;
         const double candidates[3][2] = {{c[0], c[1]}, {hips[0], hips[1]}, {hips[2], hips[3]}};
         int best = 0;
         double best_dist = 1e12;
-        for(int j = 0; j < 3; ++j){
-            const double d = std::hypot(obs[0] - candidates[j][0], obs[1] - candidates[j][1]);
-            if(d < best_dist){ best_dist = d; best = j; }
+        for (int j = 0; j < 3; ++j) {
+            const double d = std::hypot(tx - candidates[j][0], ty - candidates[j][1]);
+            if (d < best_dist){
+                best_dist = d;
+                best = j;
+            }
         }
         const double* pt = candidates[best];
         const double norm = best_dist + 1e-5;
-        const double ax = (obs[0] - pt[0]) / norm;
-        const double ay = (obs[1] - pt[1]) / norm;
-        const double b = -(ax * (pt[0] + obs[0]) / 2.0 + ay * (pt[1] + obs[1]) / 2.0);
+        const double ax = (tx - pt[0]) / norm;
+        const double ay = (ty - pt[1]) / norm;
+        // same margin as model constraints of lipm_model.py
+        const double m = k_safe * (o.radius + (pessimistic ? obstacleMargin(kind, ax, ay, o, t) : 0.0));
+        const double gap = ax * (o.x - pt[0]) + ay * (o.y- pt[1]) - m;  // robot point - border of the set
+        const double b = m + 0.5 * std::max(gap, 0.0) - (ax * o.x + ay * o.y);
         return std::array<double, 3>{ax, ay, b};
     };
 
+    double t_node[2] = {0.0, 0.0};      // time at start of node k in each branch
     std::vector<double> x_guess = x0;
     for(int k = 0; k < n_horizon_; ++k){
         const int idx_x = std::min(k + shift, n_horizon_);
@@ -605,8 +633,7 @@ void AcadosLeggedController::setWarmStart(const std::vector<double>& x0, const G
             u_guess[iu + 7] = (k == 0) ? std::max(gait.timeLeft(), 1e-3) : u_prev[iu + 7];  // node 0: dt fixed to the time left
 
             for(int i = 0; i < n_obs_max_; ++i){
-                const double obs[2] = {obstacles[i].x, obstacles[i].y};
-                const auto ab = hyperplaneGuess(c, hips, obs);
+                const auto ab = hyperplaneGuess(c, hips, obstacles[i], br == 1, obstacles[i].t0 + t_node[br]);
                 u_guess[iu + 8 + 3 * i + 0] = ab[0];
                 u_guess[iu + 8 + 3 * i + 1] = ab[1];
                 u_guess[iu + 8 + 3 * i + 2] = ab[2];
@@ -614,6 +641,7 @@ void AcadosLeggedController::setWarmStart(const std::vector<double>& x0, const G
 
             // State guess: CoM/vel from the previous solution, feet from x_prev, time = dt
             x_guess[ix + 10] = u_prev[iu + 7];
+            t_node[br] += u_guess[iu + 7];
         }
 
         // Node 0: the 8 physical controls must be equal in the two branches -> use the pessimistic ones (as main.py)
@@ -734,7 +762,11 @@ void AcadosLeggedController::publishPredictions(const GaitPlanner& gait){
 // the message (the obstacle may have moved that much since it was seen, as the pessimistic branch assumes); with more
 // obstacles than N_OBS_MAX the closest to the robot (distance minus radius) are kept
 std::vector<ObstacleState> AcadosLeggedController::activeObstacles(double robot_x, double robot_y){
-    if (!obstacles_from_topic_) return obstacle_manager_->active();
+    if (!obstacles_from_topic_) {
+        std::vector<ObstacleState> obstacles = obstacle_manager_->active();
+        for (auto& obs : obstacles) obs.radius += cfg_.pos_uncertainty;
+        return obstacles;
+    }
 
     std::vector<ObstacleState> obstacles;
     double stamp = 0.0;
@@ -755,14 +787,17 @@ std::vector<ObstacleState> AcadosLeggedController::activeObstacles(double robot_
     double age = (stamp > 0.0) ? sim_time_ - stamp : 0.0;
     if (age > obstacles_timeout_) {
         RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
-                             "[Acados MPC]: obstacles %.2f s old, radius inflated", age);
+                             "[Acados MPC]: obstacles %.2f s old, reachable set grown", age);
     }
     age = std::clamp(age, 0.0, obstacles_max_age_);
-    for (auto& obs : obstacles) obs.radius += obs.y_dot_max * age;
+    for (auto& obs : obstacles) {
+        obs.t0 = age;       // the OCP evaluates the reachable set at t0 + t
+        obs.radius += cfg_.pos_uncertainty;
+    }
 
     if (static_cast<int>(obstacles.size()) > n_obs_max_) {
         auto clearance = [robot_x, robot_y](const ObstacleState& o) {
-            return std::hypot(o.x - robot_x, o.y - robot_y) - o.radius;
+            return std::hypot(o.x - robot_x, o.y - robot_y) - o.radius - o.y_dot_max * o.t0;
         };
         std::partial_sort(obstacles.begin(), obstacles.begin() + n_obs_max_, obstacles.end(),
                           [&](const ObstacleState& a, const ObstacleState& b) { return clearance(a) < clearance(b); });
@@ -790,29 +825,65 @@ std::vector<ObstacleState> AcadosLeggedController::toSlots(std::vector<ObstacleS
 void AcadosLeggedController::publishObstacles(const std::vector<ObstacleState>& obstacles){
     visualization_msgs::msg::MarkerArray msg;
 
+    // Set at node 1 drawn at one nominal step: x_1[10] (time left of the current step) goes to 0 during the
+    // step and jumps back at each new step, so the contour would pulse
+    const double t_node1 = cfg_.nominalStepDuration();
 
     for (size_t i = 0; i < obstacles.size(); ++i){
-        for (const bool keep_out : {false, true}){
-            visualization_msgs::msg::Marker marker;
-            marker.header.frame_id = "odom";
-            marker.ns = keep_out ? "obstacle_keep_out" : "obstacle";
-            marker.id = static_cast<int>(i);
-            marker.type = visualization_msgs::msg::Marker::CYLINDER;
-            marker.action = visualization_msgs::msg::Marker::ADD;
-            // 1.8 = factor of the obstacle constraint in lipm_model.py
-            const double radius = keep_out ? 1.8 * obstacles[i].radius : obstacles[i].radius;
-            marker.scale.x = 2.0 * radius;
-            marker.scale.y = 2.0 * radius;
-            marker.scale.z = keep_out ? 0.01 : 0.5;
-            marker.pose.position.x = obstacles[i].x;
-            marker.pose.position.y = obstacles[i].y;
-            marker.pose.position.z = marker.scale.z / 2.0;
-            marker.pose.orientation.w = 1.0;
-            marker.color.r = 1.0f;
-            marker.color.a = keep_out ? 0.25f : 1.0f;
-            marker.lifetime = rclcpp::Duration::from_seconds(0.5); // disappears if removed from the yaml
-            msg.markers.push_back(marker);
+        
+        visualization_msgs::msg::Marker marker;
+        marker.header.frame_id = "odom";
+        marker.ns = "obstacle";
+        marker.id = static_cast<int>(i);
+        marker.type = visualization_msgs::msg::Marker::CYLINDER;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+        const double radius = obstacles[i].radius;
+        marker.scale.x = 2.0 * radius;
+        marker.scale.y = 2.0 * radius;
+        marker.scale.z = 0.5;
+        marker.pose.position.x = obstacles[i].x;
+        marker.pose.position.y = obstacles[i].y;
+        marker.pose.position.z = marker.scale.z / 2.0;
+        marker.pose.orientation.w = 1.0;
+        marker.color.r = 1.0f;
+        marker.color.a = 1.0f;
+        marker.lifetime = rclcpp::Duration::from_seconds(0.5); // disappears if removed from the yaml
+        msg.markers.push_back(marker);
+
+        // Reachable set of the pessimistic branch at node 1, for both formulations (comparison): leonardelli blue,
+        // support green. The one used by the OCP (margin_kind) is thicker and opaque
+        const double t_set = obstacles[i].t0 + t_node1;
+        for (const std::string kind : {"leonardelli", "support"}) {
+            const bool active = (kind == cfg_.margin_kind);
+            visualization_msgs::msg::Marker set;
+            set.header.frame_id = "odom";
+            set.ns = "reachable_set_" + kind;
+            set.id = static_cast<int>(i);
+            set.type = visualization_msgs::msg::Marker::LINE_STRIP;
+            set.action = visualization_msgs::msg::Marker::ADD;
+            set.scale.x = active ? 0.03 : 0.015;
+            set.pose.orientation.w = 1.0;
+            if (kind == "leonardelli") {
+                set.color.r = 0.15f; set.color.g = 0.45f; set.color.b = 1.0f;
+            } else {
+                set.color.r = 0.1f; set.color.g = 0.8f; set.color.b = 0.2f;
+            }
+            set.color.a = active ? 1.0f : 0.5f;
+            set.lifetime = rclcpp::Duration::from_seconds(0.5);
+            for (int j = 0; j <= 48; ++j) {
+                const double ang = 2.0 * M_PI * j / 48.0;
+                const double dx = std::cos(ang), dy = std::sin(ang);       // d, direction of the robot
+                const double h = cfg_.safety_factor * (obstacles[i].radius + obstacleMargin(kind, -dx, -dy, obstacles[i], t_set));  // a = -d
+                geometry_msgs::msg::Point pt;
+                pt.x = obstacles[i].x + h * dx;
+                pt.y = obstacles[i].y + h * dy;
+                pt.z = 0.01;
+                set.points.push_back(pt);
+            }
+            msg.markers.push_back(set);
         }
+
+        
     }
 
     obstacle_pub_->publish(msg);
@@ -1009,7 +1080,7 @@ void AcadosLeggedController::mpcThreadLoop(){
         for(int k = 0; k <= n_horizon_; ++k) {
             std::vector<double> p = gait_local.hipOffsetParams(k);
             for(const auto& obs : obstacles) {
-                p.insert(p.end(), {obs.x, obs.y, obs.radius, obs.y_dot_max});
+                p.insert(p.end(), {obs.x, obs.y, obs.radius, obs.y_dot_max, obs.a_max, obs.vx, obs.vy, obs.e_v, obs.t0});
             }
             const std::vector<double>& x_pred = (k == 0) ? x0_local : x_prev_sol_[k];
             double s_align = 1.0 - w_path;

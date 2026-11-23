@@ -22,7 +22,7 @@ public:
     // Set the reference (yref) at node k - dim 38 (16 if k == N)
     bool setReference(int stage, const std::vector<double>& yref);
 
-    // Set params at node k - dim 4 + 4*N_obs_max + 2 (hips, obstacles, s_align, theta_goal)
+    // Set params at node k - dim 4 + 9*N_obs_max + 2 (hips, obstacles, s_align, theta_goal)
     bool setParameters(int stage, const std::vector<double>& p);
 
     // Set the initial guess for the state and control (warm start)

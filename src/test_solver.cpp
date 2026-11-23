@@ -22,7 +22,7 @@ int main(int argc, char** argv){
     solver.setInitialState(x0);
     
     // Parameter and reference
-    int np = 4 + 4 * n_obs_max + 2;
+    int np = 4 + 9 * n_obs_max + 2;
     std::vector<double> p(np, 0.0);
     p[np - 2] = 1.0; // s_align: face the velocity
 

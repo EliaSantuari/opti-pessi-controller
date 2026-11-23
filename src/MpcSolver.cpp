@@ -12,7 +12,7 @@ MpcSolver::MpcSolver(int n_obs_max, int n_horizon) : n_obs_max_(n_obs_max), n_ho
 
     nx_ = 22;
     nu_ = (8 + 3 * n_obs_max_) * 2;
-    np_ = 4 + 4 * n_obs_max_ + 2; // hips, obstacles, heading (s_align, theta_goal)
+    np_ = 4 + 9 * n_obs_max_ + 2; // hips, obstacles, heading (s_align, theta_goal)
 
     // CONFIG CHECK: config.yaml must match the dimensions of c_generated_code (otherwise regenerate with model_gen.py)
     if(n_horizon_ != OCP_LIPM_OPTI_PESSI_N || nx_ != OCP_LIPM_OPTI_PESSI_NX ||

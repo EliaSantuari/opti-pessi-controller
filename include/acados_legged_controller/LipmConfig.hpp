@@ -10,6 +10,7 @@ struct ObstacleConfig {
     double x, y;            // m
     double r_obs;           // m    
     double y_dot_max;       // m/s
+    double a_max = 1.0;     // m/s^2
     double end_x = 0.0;     // m
     double end_y = 0.0;     // m
     double speed = 0.0;     // m/s
@@ -28,6 +29,7 @@ struct RandomObstacleConfig {
     std::array<double, 2> r_range{};        // m
     std::array<double, 2> speed_range{};    // m/s
     double y_dot_max = 0.0;                 // m/s
+    double a_max = 1.0;                     // m/s^2
 };
 
 
@@ -35,6 +37,7 @@ struct RandomObstacleConfig {
 struct ObstacleTypeConfig {
     double radius = 0.0;        // m
     double y_dot_max = 0.0;     // m/s
+    double a_max = 1.0;         // m/s^2
 };
 
 
@@ -77,6 +80,10 @@ struct LipmConfig {
     std::vector<ObstacleConfig> obstacles;
     RandomObstacleConfig random_obstacles;
     ObstacleTypeConfig human_type, car_type;
+    std::string margin_kind;        // leonardelli | min_max | support
+    double safety_factor;           // multiplies r + margin (same as lipm_model.py)
+    double pos_uncertainty;         // m, e_y
+    double vel_uncertainty;         // m/s, e_v when velocity is known
 
 
     

@@ -394,7 +394,7 @@ void ocp_lipm_opti_pessi_acados_create_set_default_parameters(ocp_lipm_opti_pess
     // initialize parameters to initial value
     
     double* p = calloc(NP, sizeof(double));
-    p[16] = 1;
+    p[31] = 1;
 
     for (int i = 0; i <= N; i++) {
         ocp_lipm_opti_pessi_acados_update_params(capsule, i, p, NP);
@@ -969,7 +969,7 @@ void ocp_lipm_opti_pessi_acados_create_setup_nlp_in_numerical_values(ocp_lipm_op
     lh_0[34] = -1000000;
     lh_0[35] = -1000000;
     lh_0[36] = -1000000;
-    lh_0[38] = -0.5;
+    lh_0[38] = -1.5;
     lh_0[39] = -0.45;
     lh_0[44] = -1000000;
     lh_0[45] = -1000000;
@@ -994,7 +994,7 @@ void ocp_lipm_opti_pessi_acados_create_setup_nlp_in_numerical_values(ocp_lipm_op
     lh_0[66] = -1000000;
     lh_0[67] = -1000000;
     lh_0[68] = -1000000;
-    lh_0[70] = -0.5;
+    lh_0[70] = -1.5;
     lh_0[71] = -0.45;
     uh_0[8] = 0.0625;
     uh_0[9] = 0.0625;
@@ -1198,11 +1198,11 @@ void ocp_lipm_opti_pessi_acados_create_setup_nlp_in_numerical_values(ocp_lipm_op
     double* lubx = calloc(2*NBX, sizeof(double));
     double* lbx = lubx;
     double* ubx = lubx + NBX;
-    lbx[0] = -0.6;
-    ubx[0] = 0.6;
+    lbx[0] = -0.8;
+    ubx[0] = 0.8;
     ubx[1] = 100;
-    lbx[2] = -0.6;
-    ubx[2] = 0.6;
+    lbx[2] = -0.8;
+    ubx[2] = 0.8;
     ubx[3] = 100;
 
     for (int i = 1; i < N; i++)
@@ -1242,7 +1242,7 @@ void ocp_lipm_opti_pessi_acados_create_setup_nlp_in_numerical_values(ocp_lipm_op
     lh[26] = -1000000;
     lh[27] = -1000000;
     lh[28] = -1000000;
-    lh[30] = -0.5;
+    lh[30] = -1.5;
     lh[31] = -0.45;
     lh[36] = -1000000;
     lh[37] = -1000000;
@@ -1267,7 +1267,7 @@ void ocp_lipm_opti_pessi_acados_create_setup_nlp_in_numerical_values(ocp_lipm_op
     lh[58] = -1000000;
     lh[59] = -1000000;
     lh[60] = -1000000;
-    lh[62] = -0.5;
+    lh[62] = -1.5;
     lh[63] = -0.45;
     uh[0] = 0.0625;
     uh[1] = 0.0625;
@@ -1854,7 +1854,7 @@ int ocp_lipm_opti_pessi_acados_update_params(ocp_lipm_opti_pessi_solver_capsule*
 {
     int solver_status = 0;
 
-    int casadi_np = 18;
+    int casadi_np = 33;
     if (casadi_np != np) {
         printf("acados_update_params: trying to set %i parameters for external functions."
             " External function has %i parameters. Exiting.\n", np, casadi_np);

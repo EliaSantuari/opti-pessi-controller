@@ -207,7 +207,7 @@ install(DIRECTORY launch
 # Publishes the TF odom -> base from /odom (robot in RViz)
 # Relays the planner goals (/opti_pessi/goal) to /goal_pose (load_controller_launch.xml)
 # Manual tests: record_test.py records one test (bag + outcome), analyze_tests.py turns the tests into CSV and plots
-install(PROGRAMS scripts/odom_to_tf.py scripts/opti_pessi_goal_relay.py scripts/record_test.py scripts/analyze_tests.py
+install(PROGRAMS scripts/odom_to_tf.py scripts/opti_pessi_goal_relay.py scripts/record_test.py scripts/analyze_tests.py scripts/compare_campaigns.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

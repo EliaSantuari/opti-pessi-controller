@@ -75,6 +75,13 @@ LipmConfig LipmConfig::fromYaml(const std::string& path){
 
 
     cfg.N_OBS_MAX = readKey<int>(root, "obstacles", "N_OBS_MAX");
+    cfg.margin_kind = readKey<std::string>(root, "obstacles", "margin_kind");
+    if (cfg.margin_kind != "leonardelli" && cfg.margin_kind != "min_max" && cfg.margin_kind != "support"){
+        throw std::runtime_error("[LipmConfig]: obstacles.margin_kind must be leonardelli, min_max or support!!");
+    }
+    cfg.pos_uncertainty = readKey<double>(root, "obstacles", "pos_uncertainty");
+    cfg.vel_uncertainty = readKey<double>(root, "obstacles", "vel_uncertainty");
+    cfg.safety_factor = readKey<double>(root, "obstacles", "safety_factor");
     for (const auto& obs : root["obstacles"]["instances"]) {
         const auto pos = obs["pos"].as<std::vector<double>>();
         const auto pos_end = obs["pos_end"].as<std::vector<double>>(pos);
@@ -87,6 +94,7 @@ LipmConfig LipmConfig::fromYaml(const std::string& path){
         obstacle.y = pos[1];
         obstacle.r_obs = obs["r_obs"].as<double>();
         obstacle.y_dot_max = obs["y_dot_max"].as<double>();
+        obstacle.a_max = obs["a_max"].as<double>();
         obstacle.end_x = pos_end[0];
         obstacle.end_y = pos_end[1];
         obstacle.speed = obs["speed"].as<double>(0.0);
@@ -113,15 +121,16 @@ LipmConfig LipmConfig::fromYaml(const std::string& path){
         cfg.random_obstacles.r_range = random["r_range"].as<std::array<double, 2>>();
         cfg.random_obstacles.speed_range = random["speed_range"].as<std::array<double, 2>>();
         cfg.random_obstacles.y_dot_max = random["y_dot_max"].as<double>();
+        cfg.random_obstacles.a_max = random["a_max"].as<double>();
     }
 
 
     auto readType = [&root](const std::string& name) {
         const YAML::Node type = root["obstacle_types"][name];
-        if (!type || !type["radius"] || !type["y_dot_max"]){
-            throw std::runtime_error("[LipmConfig]: missing obstacle_types." + name + ".{radius, y_dot_max} in config.yaml");
+        if (!type || !type["radius"] || !type["y_dot_max"] || !type["a_max"]){
+            throw std::runtime_error("[LipmConfig]: missing obstacle_types." + name + ".{radius, y_dot_max, a_max} in config.yaml");
         }
-        return ObstacleTypeConfig{type["radius"].as<double>(), type["y_dot_max"].as<double>()};
+        return ObstacleTypeConfig{type["radius"].as<double>(), type["y_dot_max"].as<double>(), type["a_max"].as<double>()};
     };
     cfg.human_type = readType("human");
     cfg.car_type = readType("car");

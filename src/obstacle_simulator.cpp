@@ -140,6 +140,10 @@ private:
             obstacle.position.x = states[i].x;
             obstacle.position.y = states[i].y;
             obstacle.position.z = 0.0;
+            obstacle.velocity.x = states[i].vx;
+            obstacle.velocity.y = states[i].vy;
+            obstacle.velocity.z = 0.0;
+            obstacle.velocity_valid = true;
             msg.obstacles.push_back(obstacle);
         }
         obstacles_pub_->publish(msg);

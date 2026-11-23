@@ -6,6 +6,36 @@ from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
 
 
 
+def support_margin(u0, t, v_max, a_max):
+    """
+    Max displacement along d in time t with u(0)=u_0, du/dt <= a_max, u <= v_max
+    """
+    u0 = cs.fmin(cs.fmax(u0, -v_max), v_max)        # noisy estimate can be above v_max
+    a_max = cs.fmax(a_max, 1e-3)                    # ghost obstacles have a_max = 0
+    t_star = (v_max - u0) / a_max                   # saturation instant
+    return v_max * t - 0.5 * a_max * t_star**2 + 0.5 * a_max * cs.fmax(t_star - t, 0)**2
+
+
+
+
+def obstacle_margin(kind, a, v0, t, v_max, a_max, e_v):
+    """
+    Margin beyond r_obs (robot on the negative side of the line a^T x + b = 0, d = -a).
+    """
+    u0 = -cs.dot(a, v0) + e_v       # velociry towards the robot (+ uncertainty)
+    if kind == "leonardelli":
+        return v_max * t
+    if kind == "min_max":
+        return cs.fmin(v_max * t, u0 * t + 0.5 * a_max * t**2)
+    if kind == "support":
+        return support_margin(u0, t, v_max, a_max)
+    raise ValueError(f"unknown obstacles.margin_kind '{kind}'")
+
+
+
+
+
+
 # I HAVE AN OCP WITH 44 (11+11+11+11) * N VARIABLES but acados uses multiple shooting, thus it divides the problem into temporal nodes and creates a blocks structure for the matrices.
 # This means having in each node of the horizon (up to the last) an Hessian with dimensions 44x44 and in the last node of 22x22
 # 
@@ -55,6 +85,10 @@ def create_lipm_ocp(
 
     # dt_nominal for the reference
     dt_nominal = (cfg.limits.dt_min + cfg.limits.dt_max) / (2*cfg.simulation.step_per_phase) # We must fix a nominal value, otherwise the solver would sent it to zero to avoid errors
+
+    # ---- Obstacle margin ----
+    margin_kind = cfg.obstacles.margin_kind
+    safety_factor = cfg.obstacles.safety_factor
 
     # ---- Limits ----
     max_ext_sq = cfg.robot.max_ext_sq
@@ -111,8 +145,8 @@ def create_lipm_ocp(
     u_pe = cs.SX.sym('u_pe', n_u)
     u = cs.vertcat(u_op, u_pe)
 
-    # 4 hips_off, (x, y, r, y_dot_max) for each obs, (s_align, theta_goal) for the heading
-    n_p = 4 + (4 * cfg.obstacles.N_OBS_MAX) + 2
+    # 4 hips_off, (x, y, r, v_max, a_max, vx, vy, e_v, t0) for each obs, (s_align, theta_goal) for the heading
+    n_p = 4 + (9 * cfg.obstacles.N_OBS_MAX) + 2
     p_sym = cs.SX.sym('p', n_p) # hip0_x, hip0_y, hip1_x, hip1_y, obs_x, obs_y, r_obs, y_dot_max, ..., s_align, theta_goal
 
     hip_offset0, hip_offset1 = p_sym[0:2], p_sym[2:4]
@@ -120,7 +154,7 @@ def create_lipm_ocp(
     # HEADING blend, set by the controller at each node:
     #   s_align = 1 -> face the velocity (far from the goal, around the obstacles)
     #   s_align = 0 -> reach theta_goal (close to the goal)
-    idx_head = 4 + 4 * cfg.obstacles.N_OBS_MAX
+    idx_head = 4 + 9 * cfg.obstacles.N_OBS_MAX
     s_align = cs.fmin(cs.fmax(p_sym[idx_head], 0.0), 1.0)
     theta_goal = p_sym[idx_head + 1]
     sqrt_align = cs.sqrt(s_align)
@@ -331,18 +365,23 @@ def create_lipm_ocp(
             a = u_curr[idx_u : idx_u+2]
             b = u_curr[idx_u+2]
 
-            # Extract parameters of obstacle i
-            idx_p = 4 + (i * 4)
+            # Extract parameters of obstacle i: (x, y, r, v_max, a_max, vx, vy, e_v, t0)
+            idx_p = 4 + (i * 9)
             y0_obs = p_sym_local[idx_p : idx_p+2]
             r_obs = p_sym_local[idx_p+2]
-            y_dot_max = p_sym_local[idx_p+3]
+            v_max_obs = p_sym_local[idx_p+3]
+            a_max_obs = p_sym_local[idx_p+4]
+            v0_obs = p_sym_local[idx_p+5 : idx_p+7]
+            e_v_obs = p_sym_local[idx_p+7]
+            t0_obs = p_sym_local[idx_p+8]
 
             if is_pessimistic:
-                r_dynamic = r_obs + y_dot_max * x_curr[10]
+                t_obs = t0_obs + x_curr[10]
+                margin_obs = r_obs + obstacle_margin(margin_kind, a, v0_obs, t_obs, v_max_obs, a_max_obs, e_v_obs)
             else:
-                r_dynamic = r_obs
+                margin_obs = r_obs
 
-            # 1) Norma a == 1
+            # 1) Norm a == 1
             eq_obs_all.append(a[0]**2 + a[1]**2)
 
             # 2) Robot corners in negative semiplane
@@ -354,7 +393,7 @@ def create_lipm_ocp(
             eq_obs_all.append(cs.dot(a, p1_next) + b)
 
             # 4) Obstacle in positive semiplane
-            eq_obs_all.append(cs.dot(a, y0_obs) + b - (r_dynamic * (1 + 0.8)))
+            eq_obs_all.append(cs.dot(a, y0_obs) + b - safety_factor * margin_obs)
 
             v_loc_x = c_dot[0] * cs.cos(theta) + c_dot[1] * cs.sin(theta)
             v_loc_y = -c_dot[0] * cs.sin(theta) + c_dot[1] * cs.cos(theta)
