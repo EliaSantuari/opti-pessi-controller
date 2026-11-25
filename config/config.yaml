@@ -69,7 +69,7 @@ obstacle_types:
 
 obstacles:
   N_OBS_MAX: 3
-  margin_kind: "support"        # leonardelli | min_max | support
+  margin_kind: "leonardelli"   # leonardelli | min_max | support (pessimistic set, evaluated at the end of each step)
   safety_factor: 1.8            # multiplies r + margin in both branches (as the old r_dynamic * 1.8): regenerate after a change
   pos_uncertainty: 0.0           # m, e_y added to radius
   vel_uncertainty: 0.0          # m/s, e_v whem velocity is known
@@ -81,8 +81,25 @@ obstacles:
   bot_pos_dyn: [0.1, -1.0]      # m
   obs_type: "random"            # static, dynamic, adversarial, circular, random
   obs_center: [1.0, 0.2]        # m
-  instances: 
-        - {type: "dynamic", class: "human", pos: [2.0, 1.2], pos_end: [2.0, -5.0], r_obs: 0.2, speed: 0.4, y_dot_max: 1.0, a_max: 1.0}
+  instances:
+    # SCENARIOS of the note (robot (0, 0) -> goal (4, 0)): keep one uncommented, speed also from record_test.py --speed
+    # A crossing
+    - {type: "dynamic", class: "human", pos: [2.0, 1.2], pos_end: [2.0, -5.0], r_obs: 0.2, speed: 0.4, y_dot_max: 1.0, a_max: 1.0}
+    # B lane
+    # - {type: "dynamic", class: "human", pos: [5.0, 0.7], pos_end: [-4.0, 0.7], r_obs: 0.2, speed: 0.6, y_dot_max: 1.0, a_max: 1.0}
+    # C chase (goal 6, 0)
+    # - {type: "dynamic", class: "human", pos: [1.2, 0.0], pos_end: [10.0, 0.0], r_obs: 0.2, speed: 0.5, y_dot_max: 1.0, a_max: 1.0}
+    # D circle
+    # - {type: "circular", class: "human", pos: [2.0, 0.9], center: [2.0, 0.0], r_obs: 0.2, speed: 0.5, clockwise: false, y_dot_max: 1.0, a_max: 1.0}
+    # E head-on
+    # - {type: "dynamic", class: "human", pos: [5.0, 0.1], pos_end: [-4.0, 0.1], r_obs: 0.2, speed: 0.6, y_dot_max: 1.0, a_max: 1.0}
+    # previous test
+    # - {type: "adversarial", pos: [0.1, 1.0], r_obs: 0.2, speed: 0.6, y_dot_max: 1.0, a_max: 1.0}
+
+    # - {type: "static", pos: [0.1, 1.0], r_obs: 0.2, y_dot_max: 1.0, a_max: 1.0}
+    # - {type: "dynamic", class: "human", pos: [0.1, 1.0], pos_end: [0.1, -1.0], r_obs: 0.2, speed: 0.5, y_dot_max: 1.0, a_max: 1.0}                
+    # - {type: "circular", class: "human", pos: [0.1, 1.0], center: [1.0, 0.2], r_obs: 0.2, speed: 0.45, clockwise: false, y_dot_max: 1.0, a_max: 1.0}
+    # - {type: "adversarial", pos: [0.1, 1.0], r_obs: 0.2, speed: 0.2, y_dot_max: 1.0, a_max: 1.0}
 
     # circular: starts at pos, turns around center (radius = |pos - center|), speed in m/s along the circle,
     # clockwise optional (default false = counter-clockwise)

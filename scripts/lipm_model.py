@@ -45,7 +45,8 @@ def create_lipm_ocp(
         N=8,
         c_target=np.array([0.0, 0.0]),
         theta_target=0.0,
-        x_init=np.zeros(22)
+        x_init=np.zeros(22),
+        export_dir=None,
     ) -> AcadosOcpSolver:
  
     #### CONFIGURATION ####
@@ -96,10 +97,11 @@ def create_lipm_ocp(
     lh_robot = [0.0, 0.0, 0.0, 0.0, -1e6, -1e6]
     uh_robot = [max_ext_sq, max_ext_sq, max_ext_sq, max_ext_sq, 0.0, 0.0]
 
-    # (eq_norm_a, eq_s[0], eq_s[1], eq_s[2], eq_s[3], eq_p[0], eq_p[1], eq_obs) 
-    # eq_s and eq_p ensure hips and feet to be in the negative semiplane (<= 0)
-    lh_obs_single = [0.5, -1e6, -1e6, -1e6, -1e6, -1e6, -1e6, 0.0] 
-    uh_obs_single  = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e6]
+    # (eq_norm_a, eq_s[0..3], eq_p[0], eq_p[1], eq_s_mid[0..3], eq_obs)
+    # eq_s, eq_p and eq_s_mid (corners in the middle of the step) ensure hips and feet to be in the negative semiplane (<= 0)
+    N_OBS_EQ = 12
+    lh_obs_single = [0.5] + [-1e6] * 10 + [0.0]
+    uh_obs_single = [1.0] + [0.0] * 10 + [1e6]
 
     lh_obs = lh_obs_single * cfg.obstacles.N_OBS_MAX
     uh_obs = uh_obs_single * cfg.obstacles.N_OBS_MAX
@@ -337,10 +339,10 @@ def create_lipm_ocp(
         # Hip position of next step correspondent to next foot
         h0_next, h1_next = c_next + R_th @ hip_offset0, c_next + R_th @ hip_offset1
         # Hip position of next step correspondent to prev foot (invert y)
-        hip_offset0_prec = hip_offset0
-        hip_offset0_prec[1] = -hip_offset0_prec[1]
-        hip_offset1_prec = hip_offset1
-        hip_offset1_prec[1] = -hip_offset1_prec[1]
+        # FIX: new SX (before: alias + in-place change, hip_offset0/1 stayed mirrored after the optimistic call and
+        # the pessimistic branch used the wrong pair in the hip-foot constraints)
+        hip_offset0_prec = cs.vertcat(hip_offset0[0], -hip_offset0[1])
+        hip_offset1_prec = cs.vertcat(hip_offset1[0], -hip_offset1[1])
         h0_next_prec, h1_next_prec = c_next + R_th @ hip_offset0_prec, c_next + R_th @ hip_offset1_prec
 
         # Hip distance from current step
@@ -357,6 +359,14 @@ def create_lipm_ocp(
 
         # 4 angles of the robot must stay in the negative semiplane(we  don't want the robot to be inside the obstacle)
         corners = [cs.vertcat(off_x, off_y), cs.vertcat(-off_x, off_y), cs.vertcat(-off_x, -off_y), cs.vertcat(off_x, -off_y)]
+
+        # Pose in the MIDDLE of the step (Leonardelli sec. III-C): LIPM at dt/2, yaw with the yaw rate of the step
+        dt_step = u_curr[7]
+        cop = p0 + u_curr[4] * (p1 - p0)
+        ch_mid, sh_mid = cs.cosh(w * dt_step / 2), cs.sinh(w * dt_step / 2)
+        c_mid = ch_mid * x_curr[0:2] + (sh_mid / w) * c_dot + (1 - ch_mid) * cop
+        theta_mid = theta + x_curr[5] * dt_step / 2
+        R_mid = cs.vertcat(cs.horzcat(cs.cos(theta_mid), -cs.sin(theta_mid)), cs.horzcat(cs.sin(theta_mid), cs.cos(theta_mid)))
 
         # Separating plane Constraints
         for i in range(cfg.obstacles.N_OBS_MAX):
@@ -376,7 +386,9 @@ def create_lipm_ocp(
             t0_obs = p_sym_local[idx_p+8]
 
             if is_pessimistic:
-                t_obs = t0_obs + x_curr[10]
+                # Set at the END of the step (Leonardelli eq. 22-23: r_{i+1} = r + v_max sum_{j<=i} dt_j): the robot at
+                # the end (and in the middle) of step i must be outside it. It contains the sets of the whole step
+                t_obs = t0_obs + x_curr[10] + dt_step
                 margin_obs = r_obs + obstacle_margin(margin_kind, a, v0_obs, t_obs, v_max_obs, a_max_obs, e_v_obs)
             else:
                 margin_obs = r_obs
@@ -391,6 +403,10 @@ def create_lipm_ocp(
             # 3) Feet in negative semiplane
             eq_obs_all.append(cs.dot(a, p0_next) + b)
             eq_obs_all.append(cs.dot(a, p1_next) + b)
+
+            # 3b) Robot corners in the middle of the step, same line
+            for loc in corners:
+                eq_obs_all.append(cs.dot(a, c_mid + R_mid @ loc) + b)
 
             # 4) Obstacle in positive semiplane
             eq_obs_all.append(cs.dot(a, y0_obs) + b - safety_factor * margin_obs)
@@ -443,21 +459,23 @@ def create_lipm_ocp(
     # 2) For each obstacle compute its index
     for i in range(cfg.obstacles.N_OBS_MAX):
         # First 6 values are lh_robot, each obs adds 8 eqns
-        base_idx = 6 + (8 * i)
+        base_idx = 6 + (N_OBS_EQ * i)
 
         # Make eq_s soft (4 indeces: base+1, base+2, base+3, base+4)
         idxsh_branch.extend([base_idx+1, base_idx+2, base_idx+3, base_idx+4])
         # Make sodt eq_p (2 indeces: base+5, base+6)
         idxsh_branch.extend([base_idx+5, base_idx+6])
-        # eq_norm_a (base_idx) and eq_obs (base_idx+7) remain HARD
+        # Make soft the mid-step corners (base+7 ... base+10)
+        idxsh_branch.extend([base_idx+7, base_idx+8, base_idx+9, base_idx+10])
+        # eq_norm_a (base_idx) and eq_obs (base_idx+11) remain HARD
 
     # 3) Local velocities
-    # After the 6 robot eqns and (8*N_max) obs eqns
-    vel_idx = 6 + (8 * cfg.obstacles.N_OBS_MAX)
+    # After the 6 robot eqns and (N_OBS_EQ*N_max) obs eqns
+    vel_idx = 6 + (N_OBS_EQ * cfg.obstacles.N_OBS_MAX)
     idxsh_branch.extend([vel_idx, vel_idx+1])
 
     # Unify opt and pes
-    n_h_branc = 8 + (8 * cfg.obstacles.N_OBS_MAX) # Total constraint number for each branch
+    n_h_branc = 8 + (N_OBS_EQ * cfg.obstacles.N_OBS_MAX) # Total constraint number for each branch
     idxsh_total = idxsh_branch + [i + n_h_branc for i in idxsh_branch]
     ocp.constraints.idxsh = np.array(idxsh_total)
 
@@ -465,7 +483,7 @@ def create_lipm_ocp(
     # Soft constraints on non linear constraints
     # Z: quadratic penalty - z: linear penalty
     # [4x Kinematic] + [7x Collision] + [2x velocities]
-    n_soft_collision = 6 * cfg.obstacles.N_OBS_MAX
+    n_soft_collision = 10 * cfg.obstacles.N_OBS_MAX
 
     Zu_sh_branch = [1e4]*4 + [1e4]*n_soft_collision + [1e3]*2
     zu_sh_branch = [1e3]*4 + [1e3]*n_soft_collision + [1e2]*2
@@ -533,6 +551,12 @@ def create_lipm_ocp(
     ocp.name = "ocp_lipm_opti_pessi"
 
     # Automatically export c_generated_code to cpp work space
-    ocp.code_export_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'c_generated_code')
+    # export_dir: default c_generated_code of the controller, closed_loop_test.py uses a temporary folder
+    json_file = 'acados_ocp.json'
+    if export_dir is None:
+        export_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'c_generated_code')
+    else:
+        json_file = os.path.join(export_dir, 'acados_ocp.json')
+    ocp.code_export_directory = export_dir
 
-    return AcadosOcpSolver(ocp, json_file='acados_ocp.json')
+    return AcadosOcpSolver(ocp, json_file=json_file)

@@ -633,14 +633,17 @@ void AcadosLeggedController::setWarmStart(const std::vector<double>& x0, const G
             u_guess[iu + 7] = (k == 0) ? std::max(gait.timeLeft(), 1e-3) : u_prev[iu + 7];  // node 0: dt fixed to the time left
 
             for(int i = 0; i < n_obs_max_; ++i){
-                const auto ab = hyperplaneGuess(c, hips, obstacles[i], br == 1, obstacles[i].t0 + t_node[br]);
+                // pessimistic: set at the END of node k, as the constraint of lipm_model.py (Leonardelli eq. 22-23)
+                const double t_set = obstacles[i].t0 + t_node[br] + (br == 1 ? u_guess[iu + 7] : 0.0);
+                const auto ab = hyperplaneGuess(c, hips, obstacles[i], br == 1, t_set);
                 u_guess[iu + 8 + 3 * i + 0] = ab[0];
                 u_guess[iu + 8 + 3 * i + 1] = ab[1];
                 u_guess[iu + 8 + 3 * i + 2] = ab[2];
             }
 
-            // State guess: CoM/vel from the previous solution, feet from x_prev, time = dt
-            x_guess[ix + 10] = u_prev[iu + 7];
+            // State guess: CoM/vel from the previous solution, feet from x_prev, time = start of node k
+            // (FIX: was the dt of the node, x[10] is the cumulative time from x0)
+            x_guess[ix + 10] = t_node[br];
             t_node[br] += u_guess[iu + 7];
         }
 
